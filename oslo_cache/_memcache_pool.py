@@ -22,6 +22,7 @@ import threading
 import time
 
 
+import debtcollector
 from oslo_log import log
 from pymemcache.client import hash as pymemcache_hash
 from pymemcache import serde
@@ -191,40 +192,154 @@ class MemcacheClientPool(ConnectionPool):
         self._hosts_deaduntil = [0] * len(urls)
 
     def _init_arguments(self):
+        # (hberaud) Map backward compat between python-memcached
+        # and pymemcache.
+        # Available params differ between libs, the goal of this function
+        # is to make enduser compatible with pymemcache.
+        if 'pickleProtocol' in self._arguments:
+            # (hberaud) get the right version of pickle depending on user
+            # choice. this is a python-memcache argument which can be emulated
+            # by using the right version of pickle in serializer like bellow.
+            # By default python-memcached using pickle version 0 and
+            # pymemcache using pickle version 2 by default.
+            # The version 0 is compatible with old versions of python and the
+            # version 2 is a more efficient and modern version, so if user
+            # don't ask for a specific version let's use the version 2 as
+            # the default version here.
+            # https://docs.python.org/3.7/library/pickle.html#data-stream-format ## noqa
+            serializer = serde.get_python_memcache_serializer(
+                pickle_version=int(self._arguments['pickleProtocol']))
+            self._arguments['serializer'] = serializer
+            del self._arguments['pickleProtocol']
+            debtcollector.deprecate(
+                "`pickleProtocol` argument is deprecated and will "
+                "be no longer supported. "
+                "Support will be removed in future version")
+
+        if 'pickler' in self._arguments:
+            # prior to pymemcache first
+            if 'serializer' not in self._arguments:
+                self._arguments['serializer'] = self._arguments['pickler']
+            else:
+                self._debug_logger(
+                    'serializer is given pickler will be ignored')
+            del self._arguments['pickler']
+            debtcollector.deprecate(
+                "`pickler` argument is deprecated and will be no "
+                "longer supported. Prefer to use `serializer` instead.")
+
+        if 'unpickler' in self._arguments:
+            # prior to pymemcache first
+            if 'deserializer' not in self._arguments:
+                self._arguments['deserializer'] = self._arguments['unpickler']
+            else:
+                self._debug_logger(
+                    'deserializer is given unpickler will be ignored')
+            del self._arguments['unpickler']
+            debtcollector.deprecate(
+                "`unpickler` argument is deprecated and will be no "
+                "longer supported. Prefer to use `deserializer` instead.")
+
         if 'serializer' not in self._arguments:
             self._arguments['serializer'] = DEFAULT_SERIALIZER
+
         if 'deserializer' not in self._arguments:
             self._arguments['deserializer'] = DEFAULT_DESERIALIZER
+
+        # (hberaud) Some arguments are no longer supported because
+        # no correspondance exist with pymemcache so we just need to
+        # deprecate them to inform users that they will be removed soon.
+        # Special not about debug, on python-memcached sys.stderr is used to
+        # print debug only if the `debug` param is given and equal to `True`.
+        # pymemcache handle debug with standard logging level so we
+        # just need to set the right log level in config to get debug
+        # outputs in standard logs.
+        ignored = [
+            'debug',
+            'pload',
+            'pid',
+            'cache_cas',
+            'server_max_key_length',
+            'server_max_value_length',
+            'flush_on_reconnect',
+            'check_keys',
+        ]
+        for el in ignored:
+            if el in self._arguments:
+                del self._arguments[el]
+                debtcollector.deprecate(
+                    "`%s` argument is deprecated and no longer "
+                    "supported. It will be ignored during execution. "
+                    "Support will be removed in future version" % el)
+
         if 'socket_timeout' in self._arguments:
-            timeout = self._arguments['socket_timeout']
-            self._arguments['connection_timeout'] = timeout
+            # prior to pymemcache first
+            if 'connect_timeout' not in self._arguments:
+                timeout = self._arguments['socket_timeout']
+                self._arguments['connect_timeout'] = timeout
+            else:
+                self._debug_logger(
+                    'connect_timeout is given socket_timeout will be ignored')
             del self._arguments['socket_timeout']
+            debtcollector.deprecate(
+                "`socket_timeout` argument is deprecated and will be no "
+                "longer supported. "
+                "Prefer to use `connect_timeout` instead.")
+
+        if 'dead_retry' in self._arguments:
+            # (hberaud) The pymemcache documentation ask for a float [1]
+            # but I think we are safe here if we simply pass the dead_retry
+            # directly because pymemcache dead_timeout is intialized
+            # with an integer by default [2] (60 seconds by default).
+            # I prefer warn about this here to prevent misunderstood.
+            # [1] https://github.com/pinterest/pymemcache/blob/master/pymemcache/client/hash.py#L58 ## noqa
+            # [2] https://github.com/pinterest/pymemcache/blob/master/pymemcache/client/hash.py#L34 ## noqa
+            if 'dead_timeout' not in self._arguments:
+                self._arguments['dead_timeout'] = self._arguments[
+                    'dead_retry'
+                ]
+            else:
+                self._debug_logger(
+                    'dead_timeout is given dead_retry will be ignored')
+            del self._arguments['dead_retry']
+            debtcollector.deprecate(
+                "`dead_retry` argument is deprecated and will be no "
+                "longer supported. Prefer to use `dead_timeout` instead.")
+
+    def _format_url(self, url):
+        parsed = urlparse(url)
+        if not parsed.port:
+            port = DEFAULT_MEMCACHEPORT
+            self._trace_logger(
+                "Using port ({port}) with {url}".format(url=url, port=port)
+            )
+        else:
+            # NOTE(hberaud) removing port information from url to avoid
+            # pymemcache to concat twice. Don't use string replace to avoid
+            # ipv6 format override. Some port values can already be used
+            # inside the ipv6 format and we don't want to replace them.
+            # (example: https://[2620:52:0:13b8:8080:ff:fe3e:1]:8080)
+            port_info = len(str(parsed.port)) + 1
+            url = url[:-port_info]
+            port = parsed.port
+        return (url, int(port))
 
     def _format_urls(self, urls):
         self.urls = []
+        if isinstance(urls, str):
+            self.urls.append(self._format_url(urls))
+            return
         for url in urls:
-            parsed = urlparse(url)
-            if not parsed.port:
-                port = DEFAULT_MEMCACHEPORT
-                self._trace_logger(
-                    "Using port ({port}) with {url}".format(url=url, port=port)
-                )
-            else:
-                # NOTE(hberaud) removing port information from url to avoid
-                # pymemcache to concat twice. Don't use string replace to avoid
-                # ipv6 format override. Some port values can already be used
-                # inside the ipv6 format and we don't want to replace them.
-                # (example: https://[2620:52:0:13b8:8080:ff:fe3e:1]:8080)
-                port_info = len(str(parsed.port)) + 1
-                url = url[:-port_info]
-                port = parsed.port
-            self.urls.append((url, int(port)))
+            self.urls.append(self._format_url(url))
 
     def _create_connection(self):
         return pymemcache_hash.HashClient(self.urls, **self._arguments)
 
     def _destroy_connection(self, conn):
-        conn.disconnect_all()
+        for s in conn.clients:
+            server = conn.clients[s].server
+            port = conn.clients[s].port
+            conn.remove_server(server, port)
 
     def _get(self):
         # super() cannot be used here because Queue in stdlib is an
@@ -233,9 +348,15 @@ class MemcacheClientPool(ConnectionPool):
         try:
             # Propagate host state known to us to this client's list
             now = time.time()
-            for deaduntil, host in zip(self._hosts_deaduntil, conn.servers):
+            for deaduntil, host in zip(self._hosts_deaduntil, conn.clients):
                 if deaduntil > now and host.deaduntil <= now:
-                    host.mark_dead('propagating death mark from the pool')
+                    self._debug_logger(
+                        "Memcache: %s: "
+                        "propagating death mark from the pool. Marking dead"
+                        % host)
+                    server = conn.clients[host].server
+                    port = conn.clients[host].port
+                    host.remove_server(server, port)
                 host.deaduntil = deaduntil
         except Exception:
             # We need to be sure that connection doesn't leak from the pool.
@@ -252,7 +373,7 @@ class MemcacheClientPool(ConnectionPool):
             # If this client found that one of the hosts is dead, mark it as
             # such in our internal list
             now = time.time()
-            for i, host in zip(itertools.count(), conn.servers):
+            for i, host in zip(itertools.count(), conn.clients):
                 deaduntil = self._hosts_deaduntil[i]
                 # Do nothing if we already know this host is dead
                 if deaduntil <= now:
