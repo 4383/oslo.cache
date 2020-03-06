@@ -210,6 +210,7 @@ class MemcacheClientPool(ConnectionPool):
         # deaduntil value. Initialize this at 0 for each host with 0 indicating
         # the host is not dead.
         self._hosts_deaduntil = [0] * len(urls)
+        print("oslo.cache memcache pool urls {}".format(self.urls))
 
     def _create_connection(self):
         # NOTE(morgan): Explicitly set flush_on_reconnect for pooled
@@ -241,10 +242,17 @@ class MemcacheClientPool(ConnectionPool):
         # super() cannot be used here because Queue in stdlib is an
         # old-style class
         conn = ConnectionPool._get(self)
+        print("oslo.cache _get debug")
+        print("----------------------------------------------------")
+        import traceback
+        for line in traceback.format_stack():
+            print(line.strip())
+        print("----------------------------------------------------")
         try:
             # Propagate host state known to us to this client's list
             now = time.time()
             for deaduntil, host in zip(self._hosts_deaduntil, conn.servers):
+                print("oslo.cache _get {}".format(host))
                 if deaduntil > now and host.deaduntil <= now:
                     host.mark_dead('propagating death mark from the pool')
                 host.deaduntil = deaduntil
@@ -259,11 +267,13 @@ class MemcacheClientPool(ConnectionPool):
         return conn
 
     def _put(self, conn):
+        print("oslo.cache _put debug")
         try:
             # If this client found that one of the hosts is dead, mark it as
             # such in our internal list
             now = time.time()
             for i, host in zip(itertools.count(), conn.servers):
+                print("oslo.cache _put {}".format(host))
                 deaduntil = self._hosts_deaduntil[i]
                 # Do nothing if we already know this host is dead
                 if deaduntil <= now:
