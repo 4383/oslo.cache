@@ -244,9 +244,9 @@ class MemcacheClientPool(ConnectionPool):
         conn = ConnectionPool._get(self)
         print("oslo.cache _get debug")
         print("----------------------------------------------------")
-        import traceback
-        for line in traceback.format_stack():
-            print(line.strip())
+        #import traceback
+        #for line in traceback.format_stack():
+        #    print(line.strip())
         print("----------------------------------------------------")
         try:
             # Propagate host state known to us to this client's list
