@@ -253,6 +253,7 @@ class MemcacheClientPool(ConnectionPool):
             now = time.time()
             for deaduntil, host in zip(self._hosts_deaduntil, conn.servers):
                 print("oslo.cache _get {}".format(host))
+                print("oslo.cache _get deaduntil {}".format(host.deaduntil))
                 if deaduntil > now and host.deaduntil <= now:
                     host.mark_dead('propagating death mark from the pool')
                 host.deaduntil = deaduntil
@@ -274,6 +275,7 @@ class MemcacheClientPool(ConnectionPool):
             now = time.time()
             for i, host in zip(itertools.count(), conn.servers):
                 print("oslo.cache _put {}".format(host))
+                print("oslo.cache _put deaduntil {}".format(host.deaduntil))
                 deaduntil = self._hosts_deaduntil[i]
                 # Do nothing if we already know this host is dead
                 if deaduntil <= now:

@@ -53,6 +53,7 @@ class PooledMemcachedBackend(memcached_backend.MemcachedBackend):
             unused_timeout=arguments.get('pool_unused_timeout', 60),
             conn_get_timeout=arguments.get('pool_connection_get_timeout', 10),
         )
+        print(arguments)
 
     # Since all methods in backend just call one of methods of client, this
     # lets us avoid need to hack it too much
