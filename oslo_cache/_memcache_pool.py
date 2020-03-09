@@ -307,7 +307,18 @@ class MemcacheClientPool(ConnectionPool):
                 "longer supported. Prefer to use `dead_timeout` instead.")
 
     def _format_url(self, url):
+        # urlparse is not able to retrieve port if the
+        # given url doesn't start with a specific schema
+        # so here we force schema if not exist to exploit urlparse
+        # capabilities and after we drop the schema.
+        force_schema = False
+        if not url.startswith("http"):
+            url = "http://%s" % url
+            force_schema = True
         parsed = urlparse(url)
+        port = parsed.port
+        if force_schema:
+            url = url.replace("http://", "")
         if not parsed.port:
             port = DEFAULT_MEMCACHEPORT
             self._trace_logger(
@@ -321,18 +332,22 @@ class MemcacheClientPool(ConnectionPool):
             # (example: https://[2620:52:0:13b8:8080:ff:fe3e:1]:8080)
             port_info = len(str(parsed.port)) + 1
             url = url[:-port_info]
-            port = parsed.port
         return (url, int(port))
 
     def _format_urls(self, urls):
         self.urls = []
         if isinstance(urls, str):
+            print("here")
             self.urls.append(self._format_url(urls))
             return
         for url in urls:
             self.urls.append(self._format_url(url))
 
     def _create_connection(self):
+        print("==========================")
+        print("Create connection")
+        print("==========================")
+        print(self.urls)
         return pymemcache_hash.HashClient(self.urls, **self._arguments)
 
     def _destroy_connection(self, conn):
@@ -349,15 +364,16 @@ class MemcacheClientPool(ConnectionPool):
             # Propagate host state known to us to this client's list
             now = time.time()
             for deaduntil, host in zip(self._hosts_deaduntil, conn.clients):
-                if deaduntil > now and host.deaduntil <= now:
-                    self._debug_logger(
-                        "Memcache: %s: "
-                        "propagating death mark from the pool. Marking dead"
-                        % host)
-                    server = conn.clients[host].server
-                    port = conn.clients[host].port
-                    host.remove_server(server, port)
-                host.deaduntil = deaduntil
+                print("oslo.cache _get {}".format(host))
+                #if deaduntil > now and host.deaduntil <= now:
+                #    self._debug_logger(
+                #        "Memcache: %s: "
+                #        "propagating death mark from the pool. Marking dead"
+                #        % host)
+                #    server = conn.clients[host].server
+                #    port = conn.clients[host].port
+                #    host.remove_server(server, port)
+                #host.deaduntil = deaduntil
         except Exception:
             # We need to be sure that connection doesn't leak from the pool.
             # This code runs before we enter context manager's try-finally
@@ -374,23 +390,24 @@ class MemcacheClientPool(ConnectionPool):
             # such in our internal list
             now = time.time()
             for i, host in zip(itertools.count(), conn.clients):
-                deaduntil = self._hosts_deaduntil[i]
-                # Do nothing if we already know this host is dead
-                if deaduntil <= now:
-                    if host.deaduntil > now:
-                        self._hosts_deaduntil[i] = host.deaduntil
-                        self._debug_logger(
-                            'Marked host %s dead until %s',
-                            self.urls[i], host.deaduntil)
-                    else:
-                        self._hosts_deaduntil[i] = 0
-            # If all hosts are dead we should forget that they're dead. This
-            # way we won't get completely shut off until dead_retry seconds
-            # pass, but will be checking servers as frequent as we can (over
-            # way smaller socket_timeout)
-            if all(deaduntil > now for deaduntil in self._hosts_deaduntil):
-                self._debug_logger('All hosts are dead. Marking them as live.')
-                self._hosts_deaduntil[:] = [0] * len(self._hosts_deaduntil)
+                print("oslo.cache _put {}".format(host))
+            #    deaduntil = self._hosts_deaduntil[i]
+            #    # Do nothing if we already know this host is dead
+            #    if deaduntil <= now:
+            #        if host.deaduntil > now:
+            #            self._hosts_deaduntil[i] = host.deaduntil
+            #            self._debug_logger(
+            #                'Marked host %s dead until %s',
+            #                self.urls[i], host.deaduntil)
+            #        else:
+            #            self._hosts_deaduntil[i] = 0
+            ## If all hosts are dead we should forget that they're dead. This
+            ## way we won't get completely shut off until dead_retry seconds
+            ## pass, but will be checking servers as frequent as we can (over
+            ## way smaller socket_timeout)
+            #if all(deaduntil > now for deaduntil in self._hosts_deaduntil):
+            #    self._debug_logger('All hosts are dead. Marking them as live.')
+            #    self._hosts_deaduntil[:] = [0] * len(self._hosts_deaduntil)
         finally:
             # super() cannot be used here because Queue in stdlib is an
             # old-style class
