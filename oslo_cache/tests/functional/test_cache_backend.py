@@ -14,7 +14,8 @@
 
 import os
 
-from dogpile.cache import region as dp_region
+from oslo_config import cfg
+from oslo_config import fixture as config_fixture
 from oslo_utils import uuidutils
 
 from oslotest import base
@@ -22,112 +23,72 @@ from oslotest import base
 from oslo_cache import core as cache
 
 
-NO_VALUE = cache.NO_VALUE
+CONF = cfg.CONF
 
-TESTABLE_BACKENDS = [
-    'etcd3gw',
-]
+NO_VALUE = cache.NO_VALUE
 
 
 class TestCacheBackend(base.BaseTestCase):
-    arguments = {}
 
     def setUp(self):
         super(TestCacheBackend, self).setUp()
-        self.backend = os.getenv('OSLO_CACHE_BACKEND')
-        if self.backend not in TESTABLE_BACKENDS:
-            raise Exception(
-                "Backend (%s) not supported in tests" % self.backend)
-        if self.backend == 'etcd3gw':
-            self.backend = "oslo_cache.etcd3gw"
-            # TODO(hberaud): Ideally functional tests should be similar
-            # to the usage examples given in the oslo.cache documentation [1].
-            # Config [2] should be used to pass arguments to the backend
-            # rather than using direct usage like below.
-            # It could help us to made the tests interoperable between
-            # the different backends in use in tests.
-            # [1] https://docs.openstack.org/oslo.cache/latest/user/usage.html
-            # [2] https://docs.openstack.org/oslo.cache/latest/configuration/index.html  # noqa
-            self.arguments = {
-                'host': '127.0.0.1',
-                'port': 2379,
-            }
+        # NOTE(hberaud): Retrieving the needed configs from env vars
+        # and initializing a config fixture to use them.
+        backend = os.getenv('OS_CACHE__BACKEND')
+        # NOTE(hberaud): For functional tests backend is mandatory to
+        # avoid to use the default backend (in memory).
+        if not backend:
+            raise Exception("A backend should be specified for "
+                            "functional testing")
+        # NOTE(hberaud): Other configs can be none and if something
+        # went wrong during execution then we suppose that the zuul job
+        # is misconfigured for the given backend and you should verify first
+        # which config should be passed in this the related context.
+        backend_arguments = os.getenv('OS_CACHE__BACKEND_ARGUMENTS')
 
-    def test_typical_configuration(self):
-
-        dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
-        self.assertTrue(True)  # reached here means no initialization error
+        self.config_fixture = self.useFixture(config_fixture.Config())
+        self.config_fixture.config(
+            group='cache',
+            backend=backend,
+            enabled=True,
+            backend_argument=backend_arguments)
+        cache.configure(CONF)
+        self.region = cache.create_region()
+        cache.configure_cache_region(CONF, self.region)
 
     def test_backend_get_missing_data(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
-
         random_key = uuidutils.generate_uuid(dashed=False)
         # should return NO_VALUE as key does not exist in cache
-        self.assertEqual(NO_VALUE, region.get(random_key))
+        self.assertEqual(NO_VALUE, self.region.get(random_key))
 
     def test_backend_set_data(self):
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
-
         random_key = uuidutils.generate_uuid(dashed=False)
-        region.set(random_key, "dummyValue")
-        self.assertEqual("dummyValue", region.get(random_key))
+        self.region.set(random_key, "dummyValue")
+        self.assertEqual("dummyValue", self.region.get(random_key))
 
     def test_backend_set_none_as_data(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
-
         random_key = uuidutils.generate_uuid(dashed=False)
-        region.set(random_key, None)
-        self.assertIsNone(region.get(random_key))
+        self.region.set(random_key, None)
+        self.assertIsNone(self.region.get(random_key))
 
     def test_backend_set_blank_as_data(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
-
         random_key = uuidutils.generate_uuid(dashed=False)
-        region.set(random_key, "")
-        self.assertEqual("", region.get(random_key))
+        self.region.set(random_key, "")
+        self.assertEqual("", self.region.get(random_key))
 
     def test_backend_set_same_key_multiple_times(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
-
         random_key = uuidutils.generate_uuid(dashed=False)
-        region.set(random_key, "dummyValue")
-        self.assertEqual("dummyValue", region.get(random_key))
+        self.region.set(random_key, "dummyValue")
+        self.assertEqual("dummyValue", self.region.get(random_key))
 
         dict_value = {'key1': 'value1'}
-        region.set(random_key, dict_value)
-        self.assertEqual(dict_value, region.get(random_key))
+        self.region.set(random_key, dict_value)
+        self.assertEqual(dict_value, self.region.get(random_key))
 
-        region.set(random_key, "dummyValue2")
-        self.assertEqual("dummyValue2", region.get(random_key))
+        self.region.set(random_key, "dummyValue2")
+        self.assertEqual("dummyValue2", self.region.get(random_key))
 
     def test_backend_multi_set_data(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
         random_key = uuidutils.generate_uuid(dashed=False)
         random_key1 = uuidutils.generate_uuid(dashed=False)
         random_key2 = uuidutils.generate_uuid(dashed=False)
@@ -135,20 +96,15 @@ class TestCacheBackend(base.BaseTestCase):
         mapping = {random_key1: 'dummyValue1',
                    random_key2: 'dummyValue2',
                    random_key3: 'dummyValue3'}
-        region.set_multi(mapping)
+        self.region.set_multi(mapping)
         # should return NO_VALUE as key does not exist in cache
-        self.assertEqual(NO_VALUE, region.get(random_key))
-        self.assertFalse(region.get(random_key))
-        self.assertEqual("dummyValue1", region.get(random_key1))
-        self.assertEqual("dummyValue2", region.get(random_key2))
-        self.assertEqual("dummyValue3", region.get(random_key3))
+        self.assertEqual(NO_VALUE, self.region.get(random_key))
+        self.assertFalse(self.region.get(random_key))
+        self.assertEqual("dummyValue1", self.region.get(random_key1))
+        self.assertEqual("dummyValue2", self.region.get(random_key2))
+        self.assertEqual("dummyValue3", self.region.get(random_key3))
 
     def test_backend_multi_get_data(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
         random_key = uuidutils.generate_uuid(dashed=False)
         random_key1 = uuidutils.generate_uuid(dashed=False)
         random_key2 = uuidutils.generate_uuid(dashed=False)
@@ -156,10 +112,10 @@ class TestCacheBackend(base.BaseTestCase):
         mapping = {random_key1: 'dummyValue1',
                    random_key2: '',
                    random_key3: 'dummyValue3'}
-        region.set_multi(mapping)
+        self.region.set_multi(mapping)
 
         keys = [random_key, random_key1, random_key2, random_key3]
-        results = region.get_multi(keys)
+        results = self.region.get_multi(keys)
         # should return NO_VALUE as key does not exist in cache
         self.assertEqual(NO_VALUE, results[0])
         self.assertEqual("dummyValue1", results[1])
@@ -167,11 +123,6 @@ class TestCacheBackend(base.BaseTestCase):
         self.assertEqual("dummyValue3", results[3])
 
     def test_backend_multi_set_should_update_existing(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
         random_key = uuidutils.generate_uuid(dashed=False)
         random_key1 = uuidutils.generate_uuid(dashed=False)
         random_key2 = uuidutils.generate_uuid(dashed=False)
@@ -179,27 +130,22 @@ class TestCacheBackend(base.BaseTestCase):
         mapping = {random_key1: 'dummyValue1',
                    random_key2: 'dummyValue2',
                    random_key3: 'dummyValue3'}
-        region.set_multi(mapping)
+        self.region.set_multi(mapping)
         # should return NO_VALUE as key does not exist in cache
-        self.assertEqual(NO_VALUE, region.get(random_key))
-        self.assertEqual("dummyValue1", region.get(random_key1))
-        self.assertEqual("dummyValue2", region.get(random_key2))
-        self.assertEqual("dummyValue3", region.get(random_key3))
+        self.assertEqual(NO_VALUE, self.region.get(random_key))
+        self.assertEqual("dummyValue1", self.region.get(random_key1))
+        self.assertEqual("dummyValue2", self.region.get(random_key2))
+        self.assertEqual("dummyValue3", self.region.get(random_key3))
 
         mapping = {random_key1: 'dummyValue4',
                    random_key2: 'dummyValue5'}
-        region.set_multi(mapping)
-        self.assertEqual(NO_VALUE, region.get(random_key))
-        self.assertEqual("dummyValue4", region.get(random_key1))
-        self.assertEqual("dummyValue5", region.get(random_key2))
-        self.assertEqual("dummyValue3", region.get(random_key3))
+        self.region.set_multi(mapping)
+        self.assertEqual(NO_VALUE, self.region.get(random_key))
+        self.assertEqual("dummyValue4", self.region.get(random_key1))
+        self.assertEqual("dummyValue5", self.region.get(random_key2))
+        self.assertEqual("dummyValue3", self.region.get(random_key3))
 
     def test_backend_multi_set_get_with_blanks_none(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
         random_key = uuidutils.generate_uuid(dashed=False)
         random_key1 = uuidutils.generate_uuid(dashed=False)
         random_key2 = uuidutils.generate_uuid(dashed=False)
@@ -209,16 +155,16 @@ class TestCacheBackend(base.BaseTestCase):
                    random_key2: None,
                    random_key3: '',
                    random_key4: 'dummyValue4'}
-        region.set_multi(mapping)
+        self.region.set_multi(mapping)
         # should return NO_VALUE as key does not exist in cache
-        self.assertEqual(NO_VALUE, region.get(random_key))
-        self.assertEqual("dummyValue1", region.get(random_key1))
-        self.assertIsNone(region.get(random_key2))
-        self.assertEqual("", region.get(random_key3))
-        self.assertEqual("dummyValue4", region.get(random_key4))
+        self.assertEqual(NO_VALUE, self.region.get(random_key))
+        self.assertEqual("dummyValue1", self.region.get(random_key1))
+        self.assertIsNone(self.region.get(random_key2))
+        self.assertEqual("", self.region.get(random_key3))
+        self.assertEqual("dummyValue4", self.region.get(random_key4))
 
         keys = [random_key, random_key1, random_key2, random_key3, random_key4]
-        results = region.get_multi(keys)
+        results = self.region.get_multi(keys)
 
         # should return NO_VALUE as key does not exist in cache
         self.assertEqual(NO_VALUE, results[0])
@@ -229,33 +175,22 @@ class TestCacheBackend(base.BaseTestCase):
 
         mapping = {random_key1: 'dummyValue5',
                    random_key2: 'dummyValue6'}
-        region.set_multi(mapping)
-        self.assertEqual(NO_VALUE, region.get(random_key))
-        self.assertEqual("dummyValue5", region.get(random_key1))
-        self.assertEqual("dummyValue6", region.get(random_key2))
-        self.assertEqual("", region.get(random_key3))
+        self.region.set_multi(mapping)
+        self.assertEqual(NO_VALUE, self.region.get(random_key))
+        self.assertEqual("dummyValue5", self.region.get(random_key1))
+        self.assertEqual("dummyValue6", self.region.get(random_key2))
+        self.assertEqual("", self.region.get(random_key3))
 
     def test_backend_delete_data(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
-
         random_key = uuidutils.generate_uuid(dashed=False)
-        region.set(random_key, "dummyValue")
-        self.assertEqual("dummyValue", region.get(random_key))
+        self.region.set(random_key, "dummyValue")
+        self.assertEqual("dummyValue", self.region.get(random_key))
 
-        region.delete(random_key)
+        self.region.delete(random_key)
         # should return NO_VALUE as key no longer exists in cache
-        self.assertEqual(NO_VALUE, region.get(random_key))
+        self.assertEqual(NO_VALUE, self.region.get(random_key))
 
     def test_backend_multi_delete_data(self):
-
-        region = dp_region.make_region().configure(
-            self.backend,
-            arguments=self.arguments
-        )
         random_key = uuidutils.generate_uuid(dashed=False)
         random_key1 = uuidutils.generate_uuid(dashed=False)
         random_key2 = uuidutils.generate_uuid(dashed=False)
@@ -263,20 +198,20 @@ class TestCacheBackend(base.BaseTestCase):
         mapping = {random_key1: 'dummyValue1',
                    random_key2: 'dummyValue2',
                    random_key3: 'dummyValue3'}
-        region.set_multi(mapping)
+        self.region.set_multi(mapping)
         # should return NO_VALUE as key does not exist in cache
-        self.assertEqual(NO_VALUE, region.get(random_key))
-        self.assertEqual("dummyValue1", region.get(random_key1))
-        self.assertEqual("dummyValue2", region.get(random_key2))
-        self.assertEqual("dummyValue3", region.get(random_key3))
-        self.assertEqual(NO_VALUE, region.get("InvalidKey"))
+        self.assertEqual(NO_VALUE, self.region.get(random_key))
+        self.assertEqual("dummyValue1", self.region.get(random_key1))
+        self.assertEqual("dummyValue2", self.region.get(random_key2))
+        self.assertEqual("dummyValue3", self.region.get(random_key3))
+        self.assertEqual(NO_VALUE, self.region.get("InvalidKey"))
 
         keys = mapping.keys()
 
-        region.delete_multi(keys)
+        self.region.delete_multi(keys)
 
-        self.assertEqual(NO_VALUE, region.get("InvalidKey"))
+        self.assertEqual(NO_VALUE, self.region.get("InvalidKey"))
         # should return NO_VALUE as keys no longer exist in cache
-        self.assertEqual(NO_VALUE, region.get(random_key1))
-        self.assertEqual(NO_VALUE, region.get(random_key2))
-        self.assertEqual(NO_VALUE, region.get(random_key3))
+        self.assertEqual(NO_VALUE, self.region.get(random_key1))
+        self.assertEqual(NO_VALUE, self.region.get(random_key2))
+        self.assertEqual(NO_VALUE, self.region.get(random_key3))

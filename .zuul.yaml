@@ -11,8 +11,11 @@
     parent: oslo.cache-functional-tox-py38
     vars:
       tox_environment:
-        OSLO_CACHE_BACKEND: etcd3gw
-        OSLO_CACHE_BACKEND_DAEMON: etcd
+        PIFPAF_DAEMON: etcd
+        # Use *OS_* prefix rather than *OSLO_* to be automatically
+        # loaded by oslo.config
+        OS_CACHE__BACKEND: oslo_cache.etcd3gw
+        OS_CACHE__BACKEND_ARGUMENTS: host:127.0.0.1,port:2379
 
 - project:
     templates:
